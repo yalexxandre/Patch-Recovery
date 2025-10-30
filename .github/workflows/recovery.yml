@@ -25,6 +25,7 @@ jobs:
           set -e
           URL="${{ github.event.inputs.RECOVERY_URL }}"
           echo "Baixando: $URL"
+          # Usa a flag -L para seguir redirecionamentos
           curl -L "$URL" -o recovery.bin
           file recovery.bin || true
 
@@ -39,17 +40,17 @@ jobs:
           ls -lh recovery.img
 
           # Copia para o local onde o script2 procura (diretório de trabalho)
-          # O diretório de trabalho é o diretório atual (./)
+          # O arquivo r.img é o nome hardcoded esperado pelo script2.sh
           cp -f recovery.img r.img
           ls -lh r.img
-
-      # REMOVIDA A ETAPA "Clonar Patch-Recovery (Johx22) no caminho esperado"
 
       - name: Baixar magiskboot e posicionar no caminho correto
         run: |
           set -e
-          # Baixa o APK oficial do Magisk (é um ZIP)
-          curl -L -o Magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
+          # CORREÇÃO: Usando URL de download direto e estável para evitar erros de redirecionamento
+          MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk"
+          echo "Baixando Magisk.apk de: $MAGISK_URL"
+          curl -L -o Magisk.apk "$MAGISK_URL"
 
           # Extrai o binário arm64 e transforma em executável
           unzip -j Magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
@@ -64,7 +65,6 @@ jobs:
         run: |
           set -e
           chmod +x script1.sh script2.sh || true
-          # Alguns forks aceitam argumento; outros não. Tentamos com e sem.
           # O arquivo r.img está no mesmo diretório
           ./script1.sh r.img || ./script1.sh || true
 
