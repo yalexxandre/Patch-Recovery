@@ -4,51 +4,103 @@ on:
   workflow_dispatch:
     inputs:
       RECOVERY_URL:
-        description: 'RECOVERY URL'
+        description: 'URL direta do recovery (.img ou .img.lz4)'
         required: true
-        default: 'https://transfer.sh/(RECOMMENDED)'
-
-env:
-  RECOVERY_URL: https://oshi.at/Rpjg
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
 
     steps:
-    - name: Check Out
-      uses: actions/checkout@main
+      - name: Checkout (v4)
+        uses: actions/checkout@v4
 
-    - name: Prepare the environment
-      run: |
-        sudo apt install git wget lz4 tar openssl python3 -y
+      - name: Instalar dependências
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lz4 curl unzip zip tar git file
 
-    - name: Fetch image from URL
-      run: |
-        ls
-        pwd
-        wget ${{github.event.inputs.RECOVERY_URL }} -O recovery.img
+      - name: Baixar recovery
+        run: |
+          set -e
+          URL="${{ github.event.inputs.RECOVERY_URL }}"
+          echo "Baixando: $URL"
+          curl -L "$URL" -o recovery.bin
+          file recovery.bin || true
 
-    - name: Patch Process-1
-      run: |
-        chmod a+x script1.sh
-        chmod a+x magiskboot
-        ./script1.sh || true
+          # Se for LZ4, descompacta; senão, renomeia
+          if file recovery.bin | grep -qi "LZ4"; then
+            echo "Detectado LZ4, descompactando..."
+            lz4 -d recovery.bin recovery.img
+          else
+            mv recovery.bin recovery.img
+          fi
 
-    - name: Patch Process-2
-      run: |
-        chmod a+x script2.sh
-        ./script2.sh || true
-        python3 avbtool extract_public_key --key phh.pem --output phh.pub.bin
-        python3 avbtool add_hash_footer --partition_name recovery --partition_size $(wc -c recovery.img |cut -f 1 -d ' ') --image recovery-patched.img --key phh.pem --algorithm SHA256_RSA4096
-        mkdir output && cd output
-        mv ../recovery-patched.img recovery.img
-        tar cvf fastbootd-recovery.tar recovery.img
-        md5sum -t fastbootd-recovery.tar >> fastbootd-recovery.tar
-        mv fastbootd-recovery.tar fastbootd-recovery.tar.md5
+          ls -lh recovery.img
 
-    - name: Upload Recovery
-      uses: actions/upload-artifact@v3.0.0
-      with:
-        path: /home/runner/work/Patch-Recovery/Patch-Recovery/output/*.md5
-        name: Patched-Recovery
+          # Copia para o local onde o script2 procura (um nível acima do repo Patch-Recovery)
+          # Vamos usar /home/runner/work/Patch-Recovery/r.img como fonte para script2
+          mkdir -p /home/runner/work/Patch-Recovery
+          cp -f recovery.img /home/runner/work/Patch-Recovery/r.img
+          ls -lh /home/runner/work/Patch-Recovery/r.img
+
+- name: Clonar Patch-Recovery (Johx22) no caminho esperado
+  run: |
+    set -e
+    # Se tiver restos de run antiga, apaga
+    rm -rf /home/runner/work/Patch-Recovery/Patch-Recovery || true
+    git clone --depth=1 https://github.com/Johx22/Patch-Recovery.git /home/runner/work/Patch-Recovery/Patch-Recovery
+    ls -la /home/runner/work/Patch-Recovery/Patch-Recovery
+
+      - name: Baixar magiskboot e posicionar no caminho hardcoded
+        run: |
+          set -e
+          # Baixa o APK oficial do Magisk (é um ZIP)
+          curl -L -o Magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
+
+          # Extrai o binário arm64 e transforma em executável
+          unzip -j Magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
+          mv libmagiskboot.so magiskboot
+          chmod +x magiskboot
+
+          # Copia para o caminho duro que script2.sh usa
+          mkdir -p /home/runner/work/Patch-Recovery/Patch-Recovery
+          cp magiskboot /home/runner/work/Patch-Recovery/Patch-Recovery/magiskboot
+          ls -l /home/runner/work/Patch-Recovery/Patch-Recovery/magiskboot
+
+      - name: Rodar script1.sh
+        run: |
+          set -e
+          cd /home/runner/work/Patch-Recovery/Patch-Recovery
+          chmod +x script1.sh script2.sh || true
+          # Alguns forks aceitam argumento; outros não. Tentamos com e sem.
+          ./script1.sh ../r.img || ./script1.sh || true
+
+      - name: Rodar script2.sh
+        run: |
+          set -e
+          cd /home/runner/work/Patch-Recovery/Patch-Recovery
+          ./script2.sh
+
+      - name: Coletar artefatos gerados
+        run: |
+          set -e
+          mkdir -p output
+          # Pega possíveis arquivos gerados no repo do Patch-Recovery
+          find /home/runner/work/Patch-Recovery -maxdepth 2 -type f \( -name "*.img" -o -name "*.tar" -o -name "*.zip" \) -print -exec cp -f {} output/ \; || true
+          # Se ainda não houver .tar para Odin, tenta criar a partir do primeiro IMG patchado
+          if [ ! -f output/patched-recovery.tar ]; then
+            IMG=$(ls -1 output/*patched*recovery*.img 2>/dev/null | head -n1 || true)
+            if [ -n "$IMG" ]; then
+              echo "Criando TAR para Odin a partir de: $IMG"
+              tar --format=ustar -cvf output/patched-recovery.tar -C "$(dirname "$IMG")" "$(basename "$IMG")"
+            fi
+          fi
+          ls -lh output || true
+
+      - name: Upload patched recovery (v4)
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-recovery
+          path: output/*
+          retention-days: 7
