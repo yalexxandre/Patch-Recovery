@@ -57,8 +57,7 @@ jobs:
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
 
-          # Copia magiskboot para o diretório atual (o diretório do seu fork)
-          cp magiskboot magiskboot
+          # REMOVIDA A LINHA DE CÓPIA DESNECESSÁRIA: 'cp magiskboot magiskboot'
           ls -l magiskboot
 
       - name: Rodar script1.sh
