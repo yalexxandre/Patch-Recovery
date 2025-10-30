@@ -77,21 +77,42 @@ jobs:
           set -e
           ./script2.sh
 
-      - name: Coletar artefatos gerados
+      - name: Coletar artefatos gerados e criar .tar.md5 para Odin
         run: |
           set -e
           mkdir -p output
-          # Pega possíveis arquivos gerados no diretório de trabalho
+          
+          # 1. Pega possíveis arquivos gerados no diretório de trabalho
+          #    e copia para a pasta 'output'
           find . -maxdepth 1 -type f \( -name "*.img" -o -name "*.tar" -o -name "*.zip" \) -print -exec cp -f {} output/ \; || true
-          # Se ainda não houver .tar para Odin, tenta criar a partir do primeiro IMG patchado
-          if [ ! -f output/patched-recovery.tar ]; then
-            IMG=$(ls -1 output/*patched*recovery*.img 2>/dev/null | head -n1 || true)
-            if [ -n "$IMG" ]; then
-              echo "Criando TAR para Odin a partir de: $IMG"
-              # Cria o TAR a partir do arquivo IMG na pasta output
-              tar --format=ustar -cvf output/patched-recovery.tar -C output/ "$(basename "$IMG")"
-            fi
+          
+          # 2. Tenta criar o arquivo .tar.md5 para Odin
+          IMG=$(ls -1 output/*patched*recovery*.img 2>/dev/null | head -n1 || true)
+          
+          if [ -n "$IMG" ]; then
+            BASE_NAME=$(basename "$IMG")
+            TAR_FILE="output/patched-recovery.tar"
+            MD5_FILE="output/patched-recovery.tar.md5"
+            
+            echo "Criando TAR para Odin a partir de: $IMG"
+            
+            # Cria o arquivo .tar a partir do IMG
+            tar --format=ustar -cvf "$TAR_FILE" -C output/ "$BASE_NAME"
+            
+            # Calcula o checksum MD5 e anexa ao final do .tar
+            MD5_SUM=$(md5sum -b "$TAR_FILE" | awk '{print $1}')
+            echo "Checksum MD5 calculado: $MD5_SUM"
+            
+            # Anexa o checksum ao arquivo .tar e renomeia para .tar.md5
+            mv "$TAR_FILE" "$MD5_FILE"
+            echo "$MD5_SUM" >> "$MD5_FILE"
+            
+            # Remove o arquivo .img da saída para evitar confusão no artefato
+            rm -f "$IMG"
+            
+            echo "Arquivo final para Odin criado: $MD5_FILE"
           fi
+          
           ls -lh output || true
 
       - name: Upload patched recovery (v4)
