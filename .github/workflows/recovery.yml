@@ -82,35 +82,41 @@ jobs:
           set -e
           mkdir -p output
           
-          # 1. Pega possíveis arquivos gerados no diretório de trabalho
+          # 1. Pega o arquivo recovery-patched.img do diretório raiz
           #    e copia para a pasta 'output'
-          find . -maxdepth 1 -type f \( -name "*.img" -o -name "*.tar" -o -name "*.zip" \) -print -exec cp -f {} output/ \; || true
+          IMG_SOURCE=$(ls -1 *patched*recovery*.img 2>/dev/null | head -n1 || true)
+          
+          if [ -z "$IMG_SOURCE" ]; then
+              echo "ERRO: Não foi encontrado o arquivo recovery-patched.img. Verifique se o script2.sh rodou corretamente."
+              exit 1
+          fi
+          
+          cp -f "$IMG_SOURCE" output/
+          IMG="output/$(basename "$IMG_SOURCE")"
           
           # 2. Tenta criar o arquivo .tar.md5 para Odin
-          IMG=$(ls -1 output/*patched*recovery*.img 2>/dev/null | head -n1 || true)
+          BASE_NAME=$(basename "$IMG")
+          TAR_FILE="output/patched-recovery.tar"
+          MD5_FILE="output/patched-recovery.tar.md5"
           
-          if [ -n "$IMG" ]; then
-            BASE_NAME=$(basename "$IMG")
-            TAR_FILE="output/patched-recovery.tar"
-            MD5_FILE="output/patched-recovery.tar.md5"
-            
-            echo "Criando TAR para Odin a partir de: $IMG"
-            
-            # Cria o arquivo .tar a partir do IMG
-            tar --format=ustar -cvf "$TAR_FILE" -C output/ "$BASE_NAME"
-            
-            # Calcula o checksum MD5 e anexa ao final do .tar
-            MD5_SUM=$(md5sum -b "$TAR_FILE" | awk '{print $1}')
-            echo "Checksum MD5 calculado: $MD5_SUM"
-            
-            # Anexa o checksum ao arquivo .tar e renomeia para .tar.md5
-            mv "$TAR_FILE" "$MD5_FILE"
-            echo "$MD5_SUM" >> "$MD5_FILE"
-            
-            # Remove o arquivo .img da saída para evitar confusão no artefato
-            rm -f "$IMG"
-            
-            echo "Arquivo final para Odin criado: $MD5_FILE"
+          echo "Criando TAR para Odin a partir de: $IMG"
+          
+          # Cria o arquivo .tar a partir do IMG
+          # O comando 'tar' deve ser executado no diretório 'output' para incluir apenas o IMG
+          tar --format=ustar -cvf "$TAR_FILE" -C output/ "$(basename "$IMG")"
+          
+          # Calcula o checksum MD5 e anexa ao final do .tar
+          MD5_SUM=$(md5sum -b "$TAR_FILE" | awk '{print $1}')
+          echo "Checksum MD5 calculado: $MD5_SUM"
+          
+          # Anexa o checksum ao arquivo .tar e renomeia para .tar.md5
+          mv "$TAR_FILE" "$MD5_FILE"
+          echo "$MD5_SUM" >> "$MD5_FILE"
+          
+          # 3. Copia o vbmeta_disabled_R.tar para a pasta de saída
+          if [ -f vbmeta_disabled_R.tar ]; then
+              cp -f vbmeta_disabled_R.tar output/
+              echo "vbmeta_disabled_R.tar copiado para output."
           fi
           
           ls -lh output || true
