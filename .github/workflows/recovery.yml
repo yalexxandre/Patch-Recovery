@@ -9,11 +9,16 @@ on:
 
 jobs:
   build:
+    # Usando o runner mais recente
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout (v4)
         uses: actions/checkout@v4
+
+      # NOVO: Configura o QEMU para emular a arquitetura ARM (necessária para o magiskboot)
+      - name: Configurar QEMU para emulação ARM
+        uses: docker/setup-qemu-action@v3
 
       - name: Instalar dependências
         run: |
@@ -57,7 +62,7 @@ jobs:
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
 
-          # REMOVIDA A LINHA DE CÓPIA DESNECESSÁRIA: 'cp magiskboot magiskboot'
+          # A linha de cópia desnecessária foi removida
           ls -l magiskboot
 
       - name: Rodar script1.sh
