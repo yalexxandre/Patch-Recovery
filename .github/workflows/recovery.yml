@@ -4,115 +4,138 @@ on:
   workflow_dispatch:
     inputs:
       RECOVERY_URL:
-        description: 'URL direta do recovery (.img ou .img.lz4)'
+        description: 'URL direta do recovery (.img.lz4 preferível — aceita .img também)'
         required: true
 
 jobs:
   build:
-    # Usando o runner mais recente
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout (v4)
+      - name: Checkout
         uses: actions/checkout@v4
-
-      # NOVO: Configura o QEMU para emular a arquitetura ARM (necessária para o magiskboot)
-      - name: Configurar QEMU para emulação ARM
-        uses: docker/setup-qemu-action@v3
 
       - name: Instalar dependências
         run: |
           sudo apt-get update
           sudo apt-get install -y lz4 curl unzip zip tar git file
 
-      - name: Baixar recovery
+      - name: Baixar recovery (valida .img/.img.lz4)
         run: |
-          set -e
+          set -euo pipefail
           URL="${{ github.event.inputs.RECOVERY_URL }}"
           echo "Baixando: $URL"
-          # Usa a flag -L para seguir redirecionamentos
-          curl -L "$URL" -o recovery.bin
-          file recovery.bin || true
+          curl -L --fail -o recovery.bin "$URL"
 
-          # Se for LZ4, descompacta; senão, renomeia
+          echo "Verificando tipo e tamanho..."
+          file recovery.bin
+          stat -c "%s bytes" recovery.bin
+
+          if file recovery.bin | grep -qi "html"; then
+            echo "ERRO: Link não é binário (veio HTML). Use um link DIRETO pro arquivo."
+            exit 1
+          fi
+
           if file recovery.bin | grep -qi "LZ4"; then
-            echo "Detectado LZ4, descompactando..."
+            echo "Detectado LZ4 — descompactando para recovery.img"
             lz4 -d recovery.bin recovery.img
           else
+            echo "Detectado IMG — mantendo como recovery.img"
             mv recovery.bin recovery.img
           fi
 
           ls -lh recovery.img
+          cp -f recovery.img r.img || true
 
-          # Copia para o local onde o script2 procura (diretório de trabalho)
-          # O arquivo r.img é o nome hardcoded esperado pelo script2.sh
-          cp -f recovery.img r.img
-          ls -lh r.img
-
-      - name: Baixar magiskboot e posicionar no caminho correto
+      - name: Baixar magiskboot (x86_64) e tornar executável
         run: |
-          set -e
-          # CORREÇÃO: Usando URL de download direto e estável para evitar erros de redirecionamento
+          set -euo pipefail
           MAGISK_URL="https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk"
-          echo "Baixando Magisk.apk de: $MAGISK_URL"
-          curl -L -o Magisk.apk "$MAGISK_URL"
+          echo "Baixando: $MAGISK_URL"
+          curl -L --fail -o Magisk.apk "$MAGISK_URL"
 
-          # Extrai o binário arm64 e transforma em executável
-          unzip -j Magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
-          mv libmagiskboot.so magiskboot
-          chmod +x magiskboot
-
-          # A linha de cópia desnecessária foi removida
-          ls -l magiskboot
-
-      - name: Rodar script1.sh
-        run: |
-          set -e
-          chmod +x script1.sh script2.sh || true
-          # O arquivo r.img está no mesmo diretório
-          ./script1.sh r.img || ./script1.sh || true
-
-      - name: Rodar script2.sh
-        run: |
-          set -e
-          ./script2.sh
-
-      - name: Coletar artefatos gerados e criar .tar.md5 para Odin
-        run: |
-          set -e
-          mkdir -p output
-          
-          # Verifica se os arquivos necessários existem
-          if [ ! -f recovery-patched.img ] || [ ! -f vbmeta_disabled_R.tar ]; then
-              echo "ERRO: Arquivos de saída não encontrados (recovery-patched.img ou vbmeta_disabled_R.tar)."
-              echo "Verifique se o script2.sh rodou corretamente e criou os arquivos na raiz."
-              exit 1
+          # Preferir x86_64 no runner do GitHub
+          unzip -j Magisk.apk lib/x86_64/libmagiskboot.so -d . || true
+          if [ -f libmagiskboot.so ]; then
+            mv libmagiskboot.so magiskboot
+          else
+            echo "Fallback arm64-v8a"
+            unzip -j Magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
+            mv libmagiskboot.so magiskboot
           fi
-          
-          # 1. Cria o arquivo TAR contendo os dois arquivos
-          TAR_FILE="output/patched-recovery.tar"
-          MD5_FILE="output/patched-recovery.tar.md5"
-          
-          echo "Criando TAR para Odin a partir de recovery-patched.img e vbmeta_disabled_R.tar"
-          
-          # Cria o arquivo .tar a partir do IMG e do vbmeta
-          tar --format=ustar -cf "$TAR_FILE" recovery-patched.img vbmeta_disabled_R.tar
-          
-          # 2. Calcula o checksum MD5 e anexa ao final do .tar
-          MD5_SUM=$(md5sum -b "$TAR_FILE" | awk '{print $1}')
-          echo "Checksum MD5 calculado: $MD5_SUM"
-          
-          # 3. Renomeia o arquivo e anexa o checksum
-          mv "$TAR_FILE" "$MD5_FILE"
-          echo "$MD5_SUM" >> "$MD5_FILE"
-          
-          echo "Arquivo final para Odin criado: $MD5_FILE"
-          
-          ls -lh output || true
+          chmod +x magiskboot
+          ./magiskboot --help || true
 
-      - name: Upload patched recovery (v4)
+      - name: Rodar script1.sh (se existir)
+        run: |
+          set -euo pipefail
+          if [ -f script1.sh ]; then
+            chmod +x script1.sh
+            ./script1.sh r.img || ./script1.sh || true
+          else
+            echo "script1.sh não encontrado — seguindo"
+          fi
+
+      - name: Rodar script2.sh (se existir)
+        run: |
+          set -euo pipefail
+          if [ -f script2.sh ]; then
+            chmod +x script2.sh
+            ./script2.sh
+          else
+            echo "script2.sh não encontrado — seguindo"
+          fi
+
+      - name: Empacotar para Odin (gera AP e separa vbmeta)
+        run: |
+          set -euo pipefail
+          mkdir -p output
+
+          # Verifica saída do patch
+          if [ ! -f recovery-patched.img ]; then
+            echo "ERRO: recovery-patched.img não foi gerado. Verifique logs anteriores."
+            exit 1
+          fi
+
+          echo "Compactando recovery-patched.img em LZ4 (com content-size)"
+          cp -f recovery-patched.img recovery.img
+          lz4 -9 --content-size recovery.img recovery.img.lz4
+
+          echo "Criando TAR USTAR com recovery.img.lz4"
+          tar --format=ustar -cf Recovery.tar recovery.img.lz4
+
+          echo "Calculando MD5 e anexando (sem newline) para .tar.md5"
+          MD5_SUM=$(md5sum Recovery.tar | awk '{print $1}')
+          cp Recovery.tar Recovery.tar.md5
+          printf "%s" "$MD5_SUM" >> Recovery.tar.md5
+
+          echo "Movendo AP para output/"
+          mv Recovery.tar.md5 output/Recovery.tar.md5
+
+          echo "Localizando vbmeta (r/R)"
+          VB=""
+          if [ -f vbmeta_disabled_r.tar ]; then
+            VB="vbmeta_disabled_r.tar"
+          elif [ -f vbmeta_disabled_R.tar ]; then
+            VB="vbmeta_disabled_R.tar"
+          fi
+
+          if [ -n "$VB" ]; then
+            cp -f "$VB" output/
+            echo "$VB copiado para output/"
+          else
+            echo "ATENÇÃO: vbmeta_disabled_r.tar não encontrado no repo/pipeline."
+          fi
+
+          echo "Conteúdo de output:"
+          ls -lh output
+
+          echo "Hex dos últimos 64 bytes do AP (deve terminar com o MD5):"
+          tail -c 64 output/Recovery.tar.md5 | hexdump -C || true
+
+      - name: Upload artifacts (Patched-Recovery)
         uses: actions/upload-artifact@v4
         with:
-          name: patched-recovery
+          name: Patched-Recovery
           path: output/*
           retention-days: 7
