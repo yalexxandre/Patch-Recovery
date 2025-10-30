@@ -27,60 +27,65 @@ jobs:
           echo "Baixando: $URL"
           curl -L "$URL" -o recovery.bin
           file recovery.bin || true
+
+          # Se for LZ4, descompacta; senão, renomeia
           if file recovery.bin | grep -qi "LZ4"; then
             echo "Detectado LZ4, descompactando..."
             lz4 -d recovery.bin recovery.img
           else
             mv recovery.bin recovery.img
           fi
+
           ls -lh recovery.img
-          # copia para o local que o script usa como origem
-          mkdir -p /home/runner/work/Patch-Recovery
-          cp -f recovery.img /home/runner/work/Patch-Recovery/r.img
-          ls -lh /home/runner/work/Patch-Recovery/r.img
 
-      - name: Clonar Patch-Recovery (Johx22) no caminho esperado
+          # Copia para o local onde o script2 procura (diretório de trabalho)
+          # O diretório de trabalho é o diretório atual (./)
+          cp -f recovery.img r.img
+          ls -lh r.img
+
+      # REMOVIDA A ETAPA "Clonar Patch-Recovery (Johx22) no caminho esperado"
+
+      - name: Baixar magiskboot e posicionar no caminho correto
         run: |
           set -e
-          # limpa qualquer sobra de execução anterior
-          rm -rf /home/runner/work/Patch-Recovery/Patch-Recovery || true
-          git clone --depth=1 https://github.com/Johx22/Patch-Recovery.git /home/runner/work/Patch-Recovery/Patch-Recovery
-          ls -la /home/runner/work/Patch-Recovery/Patch-Recovery
-
-      - name: Baixar magiskboot e posicionar no caminho hardcoded
-        run: |
-          set -e
+          # Baixa o APK oficial do Magisk (é um ZIP)
           curl -L -o Magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
+
+          # Extrai o binário arm64 e transforma em executável
           unzip -j Magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
-          mkdir -p /home/runner/work/Patch-Recovery/Patch-Recovery
-          cp magiskboot /home/runner/work/Patch-Recovery/Patch-Recovery/magiskboot
-          ls -l /home/runner/work/Patch-Recovery/Patch-Recovery/magiskboot
+
+          # Copia magiskboot para o diretório atual (o diretório do seu fork)
+          cp magiskboot magiskboot
+          ls -l magiskboot
 
       - name: Rodar script1.sh
         run: |
           set -e
-          cd /home/runner/work/Patch-Recovery/Patch-Recovery
           chmod +x script1.sh script2.sh || true
-          ./script1.sh ../r.img || ./script1.sh || true
+          # Alguns forks aceitam argumento; outros não. Tentamos com e sem.
+          # O arquivo r.img está no mesmo diretório
+          ./script1.sh r.img || ./script1.sh || true
 
       - name: Rodar script2.sh
         run: |
           set -e
-          cd /home/runner/work/Patch-Recovery/Patch-Recovery
           ./script2.sh
 
       - name: Coletar artefatos gerados
         run: |
           set -e
           mkdir -p output
-          find /home/runner/work/Patch-Recovery -maxdepth 2 -type f \( -name "*.img" -o -name "*.tar" -o -name "*.zip" \) -print -exec cp -f {} output/ \; || true
+          # Pega possíveis arquivos gerados no diretório de trabalho
+          find . -maxdepth 1 -type f \( -name "*.img" -o -name "*.tar" -o -name "*.zip" \) -print -exec cp -f {} output/ \; || true
+          # Se ainda não houver .tar para Odin, tenta criar a partir do primeiro IMG patchado
           if [ ! -f output/patched-recovery.tar ]; then
             IMG=$(ls -1 output/*patched*recovery*.img 2>/dev/null | head -n1 || true)
             if [ -n "$IMG" ]; then
               echo "Criando TAR para Odin a partir de: $IMG"
-              tar --format=ustar -cvf output/patched-recovery.tar -C "$(dirname "$IMG")" "$(basename "$IMG")"
+              # Cria o TAR a partir do arquivo IMG na pasta output
+              tar --format=ustar -cvf output/patched-recovery.tar -C output/ "$(basename "$IMG")"
             fi
           fi
           ls -lh output || true
